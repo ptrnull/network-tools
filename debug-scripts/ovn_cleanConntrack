@@ -1,0 +1,259 @@
+#!/usr/bin/env bash 
+###########################################################
+# ovn_cleanConntrack.sh script to remove udp conntrack    #
+# lines persistent in a cluster hitted by BZ 2043094      #
+###########################################################
+
+#ServiceNetwork of the cluster
+network=$(oc get network cluster -o jsonpath='{ .spec.serviceNetwork[] }')
+#Log to get track of the script
+now=$(date +"%Y-%m-%d_%H-%M-%S")
+LOG="ovn_cleanConntrack.${now}.log"
+
+###########################################################
+# getServices(): prepares a list of services
+###########################################################
+function getServices(){
+		#filter by protocol=udp and only clusterips
+		OLDIFS=$IFS
+		IFS=$'\n'
+		for line in $(oc get services -A -o jsonpath='{range .items[?(@.spec.type=="ClusterIP")]}{@.spec.ports[*].protocol}{";"}{@.spec.clusterIP}{";"}{@.spec.ports[*].port}{";"}{"\n"}{end}' | grep -v 'None' ); do
+			words=$(echo $line| wc -w)
+			protos=$(echo $line | cut -d';' -f1)
+			ip=$(echo $line | cut -d';' -f2)
+			port1=$(echo $line | cut -d';' -f3)
+			if [ ${words} -gt 1 ]; then
+				count=2
+				while [ ${count} -le ${words} ]; do
+					count=$((( count + 1 )))
+					ports=$(echo ${line} | cut -d';' -f${count})
+					cports=$(echo ${ports}| wc -w)
+					while [ ${cports} -gt 0 ]; do
+						port=$(echo ${ports}| cut -d' ' -f${cports})
+						proto=$(echo ${protos}| cut -d' ' -f${cports})
+						if [ "${proto}" = "UDP" ]; then
+							services="${services}\n${ip};${port}"
+						fi
+						cports=$((( cports - 1 )))
+					done
+				done
+			else
+				if [ "${protos}" = "UDP" ]; then
+					services="\n${ip};${port1}"
+				fi
+			fi
+		done
+		IFS=$OLDIFS
+		echo -e "Final services" >> ${LOG}
+		echo "----------------" >> ${LOG}
+		echo -e ${services} >> ${LOG}
+}
+
+###########################################################
+# getEndpoints(): prepares a list of endpoints
+###########################################################
+function getEndpoints(){
+		endpoints=""
+		#filter by protocol=udp and only clusterips
+		OLDIFS=$IFS
+		IFS=$'\n'
+		for line in $(oc get endpoints -A -o jsonpath='{range .items[*].subsets[*]}{@.addresses[*].ip}{";"}{@.addresses[*].nodeName}{";"}{@.ports[*].port}{";"}{@.ports[*].protocol}{";"}{"\n"}{end}' ); do
+			ips=$(echo ${line} | cut -d';' -f1)
+			cips=$(echo ${ips}|wc -w)
+			nodes=$(echo ${line} | cut -d';' -f2)
+			cnodes=$(echo ${nodes} | wc -w)
+			ports=$(echo ${line} | cut -d';' -f3)
+			cports=$(echo ${ports} | wc -w)
+			protocols=$(echo ${line} | cut -d';' -f4)
+			
+			if [ ${cips} -gt 1 ]; then			
+				#ep multiple ip multiple ports
+				if [ ${cports} -gt 1 ]; then
+					count=1
+					while [ ${count} -le ${cips} ]; do
+						ip=$(echo ${ips} | cut -d' ' -f${count})
+						countports=1
+						node=$(echo ${nodes} | cut -d' ' -f${count})
+						while [ ${countports} -le ${cports} ]; do
+							port=$(echo ${ports} | cut -d' ' -f${countports})
+							protocol=$(echo ${protocols} | cut -d' ' -f${countports})
+							if [ "${protocol}" = "UDP" ]; then
+								endpoints="${endpoints}\n${ip};${node};${port}"
+							fi
+							countports=$((( countports + 1 )))
+						done
+						count=$((( count + 1 )))
+					done
+
+				#ep multiple ip 1 port
+				else
+					count=1
+					while [ ${count} -le ${cips} ]; do
+						ip=$(echo ${ips} | cut -d' ' -f${count})
+						node=$(echo ${nodes} | cut -d' ' -f${count})
+						if [ "${protocols}" = "UDP" ]; then
+							endpoints="${endpoints}\n${ip};${node};${ports}"
+						fi
+						count=$((( count + 1 )))
+					done
+				
+				fi
+			else
+				#ep 1 ip multiple ports
+				if [ ${cports} -gt 1 ]; then
+					count=1
+					while [ ${count} -le ${cports} ]; do
+						port=$(echo ${ports} | cut -d' ' -f${count})
+						protocol=$(echo ${protocols} | cut -d' ' -f${count})
+						if [ "${protocol}" = "UDP" ]; then
+							endpoints="${endpoints}\n${ips};${nodes};${port}"
+						fi
+						count=$((( count + 1 )))
+					done
+				#ep 1 ip 1 port
+				else
+					if [ "${protocols}" = "UDP" ]; then
+						endpoints="${endpoints}\n${ips};${nodes};${ports}"
+					fi
+				fi	
+			fi
+		done
+		IFS=$OLDIFS
+		echo -e "\nFinal endpoints" >> ${LOG}
+		echo "----------------" >> ${LOG}
+		echo -e ${endpoints} >> ${LOG}
+
+}
+
+###########################################################
+# isContrackinNetwork(): checks if a contrack line fits
+#                        the service network of the cluster
+###########################################################
+function isContrackinNetwork(){
+	line=$1;
+	dst1=$(echo $line | awk -F"dst=" '{sub(/ .*/,"",$2);print $2}')
+	dst1O1=$(echo ${dst1}|cut -d';' -f1 | cut -d'.' -f1)
+	dst1O2=$(echo ${dst1}|cut -d';' -f1 | cut -d'.' -f2)
+	netO1=$(echo ${network}|cut -d'.' -f1)
+	netO2=$(echo ${network}|cut -d'.' -f2)
+	if [[ "${dst1O1}" == "${netO1}" && "${dst1O2}" == "${netO2}" ]]; then
+		echo "conntrack in network (${network}): ${line}" >> ${LOG}
+		echo ${line} >> ${LOG}
+		return 0
+	else
+		echo "conntrack not in network (${network}): ${line}" >> ${LOG}
+		echo ${line} >> ${LOG}
+		return 1
+	fi
+}
+
+###########################################################
+# isContrackinServices(): checks if a contrack line fits
+#                          one of the services
+###########################################################
+function isContrackinServices(){
+	line=$1;
+	dst1=$(echo $line | awk -F"dst=" '{sub(/ .*/,"",$2);print $2}')
+	dstport1=$(echo $line | awk -F"dport=" '{sub(/ .*/,"",$2);print $2}')
+	OLDIFS=$IFS
+	IFS=$'\n'
+    services=$(echo -e ${services} | xargs | sed -e 's/ /\n/g')
+	for service in ${services}; do
+		srvip=$(echo $service|cut -d';' -f1)
+		srvport=$(echo $service|cut -d';' -f2)
+		if [[ "${dst1}" == "${srvip}" && "${dstport1}" == "${srvport}" ]]; then
+			return 0
+		fi
+	done
+	IFS=${OLDIFS}
+	return 1
+}
+
+###########################################################
+# isContrackinEndPoints(): checks if the conntrack fits
+#                          one of the endpoints
+###########################################################
+function isContrackinEndPoints(){
+	line=$1
+	node=$2
+	src2=$(echo $line | awk -F"src=" '{sub(/ .*/,"",$2);print $2}')
+	srcport2=$(echo $line | awk -F"sport=" '{sub(/ .*/,"",$2);print $2}')
+    myep=$(echo -e ${endpoints} | grep ${node} | xargs | sed -e 's/ /\n/g')
+	for endpoint in ${myep}; do
+		epip=$(echo ${endpoint} | cut -d';' -f1)
+		epnode=$(echo ${endpoint} | cut -d';' -f2)
+		epport=$(echo ${endpoint} | cut -d';' -f3)
+		if [[ "${epip}" == "${src2}" && "${epport}" == "${srcport2}" ]]; then
+			return 0
+		fi
+	done
+	return 1
+}
+
+###########################################################
+# generateCommands(): generates the conntrack lines to
+#                     remove the faulty line
+# Template on how to create the conntracks
+# conntrack -D -s A.A.A.A -d B.B.B.B -r C.C.C.C -q A.A.A.A
+# conntrack -D -s A.A.A.A -d C.C.C.C
+# conntrack -D -s D.D.D.D -d C.C.C.C -r C.C.C.C -q D.D.D.D
+#
+# Where:
+# src=A.A.A.A dst=B.B.B.B sport=42740 dport=5353 src=C.C.C.C
+# dst=10.128.2.41 sport=5353 dport=42740 mark=0 secctx=sy...
+#
+# D.D.D.D is the node-subnet from the node where the service 
+#         endpoint is running
+###########################################################
+function generateCommands(){
+	node=$1
+	line=$2
+	src1=$(echo ${line} | awk -F"src=" '{sub(/ .*/,"",$2);print $2}')
+	dst1=$(echo ${line} | awk -F"dst=" '{sub(/ .*/,"",$2);print $2}')
+	src2=$(echo ${line} | awk -F"src=" '{sub(/ .*/,"",$3);print $3}')
+	nodesubnet=$(oc get node ${node} -o jsonpath='{.metadata.annotations.k8s\.ovn\.org/node-subnets}'  | jq .default | xargs | cut -d'/' -f1)
+	echo "#Generating lines for node (${node}) subnet:${nodesubnet}"
+	echo "#Raw line:${line}"
+	echo "conntrack -D -s ${src1} -d ${dst1} -r ${src2} -q ${src1}"
+	echo "conntrack -D -s ${src1} -d ${src2}"
+	echo "conntrack -D -s ${nodesubnet} -d ${src2} -r ${src2} -q ${nodesubnet}"
+}
+
+###########################################################
+# getConntrack(): gets the udp conntracks, validates them #
+#                 and generates the lines to remove it    #
+###########################################################
+function getConntrack(){
+	nodes=$(oc get pods -n openshift-ovn-kubernetes -l app=ovnkube-node -o jsonpath='{range .items[*]}{@.metadata.name}{";"}{@..nodeName}{"\n"}{end}')
+	for line in ${nodes}; do
+		OLDIFS=$IFS
+		IFS=$'\n'
+		pod=$(echo ${line}|cut -d';' -f1)
+		node=$(echo ${line}|cut -d';' -f2)
+		conntracks=$(oc -n openshift-ovn-kubernetes exec pod/${pod} -c ovnkube-node -- conntrack -L -p udp 2> /dev/null)
+		for line in $(echo ${conntracks} | sed 's/udp/\nudp/g' | sed 's/\[UNREPLIED\]//g' | sed 's/\[ASSURED\]//g' | tr -s ' '); do
+			# if not found in the service network or found in services or if found in endpoints, ignore it
+			# otherwise generate the commands to remove it
+			if isContrackinNetwork $line; then
+				if ! isContrackinServices $line; then
+					if ! isContrackinEndPoints $line $node; then
+						echo -e "===> Generating conntrack lines for ($node): $line" >> ${LOG}
+						generateCommands "$node" "$line"
+					fi				
+				fi
+			fi
+		done
+		IFS=$OLDIFS			
+		
+	done
+}
+
+
+#Main
+# Prepare the cluster services data
+getServices
+# Prepare the cluster endpoints data
+getEndpoints
+# Loop over the conntrack to find persistent conntracks
+# and generate the conntrackt commands to remove it
+getConntrack
