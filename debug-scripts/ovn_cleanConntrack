@@ -18,19 +18,19 @@ function getServices(){
 		OLDIFS=$IFS
 		IFS=$'\n'
 		for line in $(oc get services -A -o jsonpath='{range .items[?(@.spec.type=="ClusterIP")]}{@.spec.ports[*].protocol}{";"}{@.spec.clusterIP}{";"}{@.spec.ports[*].port}{";"}{"\n"}{end}' | grep -v 'None' ); do
-			words=$(echo $line| wc -w)
-			protos=$(echo $line | cut -d';' -f1)
-			ip=$(echo $line | cut -d';' -f2)
-			port1=$(echo $line | cut -d';' -f3)
-			if [ ${words} -gt 1 ]; then
+			words=$(echo "${line}" | wc -w)
+			protos=$(echo "${line}" | cut -d';' -f1)
+			ip=$(echo "${line}" | cut -d';' -f2)
+			port1=$(echo "${line}" | cut -d';' -f3)
+			if [ "${words}" -gt 1 ]; then
 				count=2
-				while [ ${count} -le ${words} ]; do
+				while [ ${count} -le "${words}" ]; do
 					count=$((( count + 1 )))
-					ports=$(echo ${line} | cut -d';' -f${count})
-					cports=$(echo ${ports}| wc -w)
-					while [ ${cports} -gt 0 ]; do
-						port=$(echo ${ports}| cut -d' ' -f${cports})
-						proto=$(echo ${protos}| cut -d' ' -f${cports})
+					ports=$(echo "${line}" | cut -d';' -f"${count}")
+					cports=$(echo "${ports}" | wc -w)
+					while [ "${cports}" -gt 0 ]; do
+						port=$(echo "${ports}" | cut -d' ' -f"${cports}")
+						proto=$(echo "${protos}" | cut -d' ' -f"${cports}")
 						if [ "${proto}" = "UDP" ]; then
 							services="${services}\n${ip};${port}"
 						fi
@@ -44,9 +44,7 @@ function getServices(){
 			fi
 		done
 		IFS=$OLDIFS
-		echo -e "Final services" >> ${LOG}
-		echo "----------------" >> ${LOG}
-		echo -e ${services} >> ${LOG}
+		echo -e "Final services\n------------\n${services}" >> "${LOG}"
 }
 
 ###########################################################
@@ -58,25 +56,24 @@ function getEndpoints(){
 		OLDIFS=$IFS
 		IFS=$'\n'
 		for line in $(oc get endpoints -A -o jsonpath='{range .items[*].subsets[*]}{@.addresses[*].ip}{";"}{@.addresses[*].nodeName}{";"}{@.ports[*].port}{";"}{@.ports[*].protocol}{";"}{"\n"}{end}' ); do
-			ips=$(echo ${line} | cut -d';' -f1)
-			cips=$(echo ${ips}|wc -w)
-			nodes=$(echo ${line} | cut -d';' -f2)
-			cnodes=$(echo ${nodes} | wc -w)
-			ports=$(echo ${line} | cut -d';' -f3)
-			cports=$(echo ${ports} | wc -w)
-			protocols=$(echo ${line} | cut -d';' -f4)
+			ips=$(echo "${line}" | cut -d';' -f1)
+			cips=$(echo "${ips}" | wc -w)
+			nodes=$(echo "${line}" | cut -d';' -f2)
+			ports=$(echo "${line}" | cut -d';' -f3)
+			cports=$(echo "${ports}" | wc -w)
+			protocols=$(echo "${line}"| cut -d';' -f4)
 			
-			if [ ${cips} -gt 1 ]; then			
+			if [ "${cips}" -gt 1 ]; then			
 				#ep multiple ip multiple ports
-				if [ ${cports} -gt 1 ]; then
+				if [ "${cports}" -gt 1 ]; then
 					count=1
-					while [ ${count} -le ${cips} ]; do
-						ip=$(echo ${ips} | cut -d' ' -f${count})
+					while [ ${count} -le "${cips}" ]; do
+						ip=$(echo "${ips}" | cut -d' ' -f"${count}")
 						countports=1
-						node=$(echo ${nodes} | cut -d' ' -f${count})
-						while [ ${countports} -le ${cports} ]; do
-							port=$(echo ${ports} | cut -d' ' -f${countports})
-							protocol=$(echo ${protocols} | cut -d' ' -f${countports})
+						node=$(echo "${nodes}" | cut -d' ' -f"${count}")
+						while [ ${countports} -le "${cports}" ]; do
+							port=$(echo "${ports}" | cut -d' ' -f${countports})
+							protocol=$(echo "${protocols}" | cut -d' ' -f${countports})
 							if [ "${protocol}" = "UDP" ]; then
 								endpoints="${endpoints}\n${ip};${node};${port}"
 							fi
@@ -88,9 +85,9 @@ function getEndpoints(){
 				#ep multiple ip 1 port
 				else
 					count=1
-					while [ ${count} -le ${cips} ]; do
-						ip=$(echo ${ips} | cut -d' ' -f${count})
-						node=$(echo ${nodes} | cut -d' ' -f${count})
+					while [ ${count} -le "${cips}" ]; do
+						ip=$(echo "${ips}" | cut -d' ' -f${count})
+						node=$(echo "${nodes}" | cut -d' ' -f${count})
 						if [ "${protocols}" = "UDP" ]; then
 							endpoints="${endpoints}\n${ip};${node};${ports}"
 						fi
@@ -100,11 +97,11 @@ function getEndpoints(){
 				fi
 			else
 				#ep 1 ip multiple ports
-				if [ ${cports} -gt 1 ]; then
+				if [ "${cports}" -gt 1 ]; then
 					count=1
-					while [ ${count} -le ${cports} ]; do
-						port=$(echo ${ports} | cut -d' ' -f${count})
-						protocol=$(echo ${protocols} | cut -d' ' -f${count})
+					while [ ${count} -le "${cports}" ]; do
+						port=$(echo "${ports}" | cut -d' ' -f${count})
+						protocol=$(echo "${protocols}" | cut -d' ' -f${count})
 						if [ "${protocol}" = "UDP" ]; then
 							endpoints="${endpoints}\n${ips};${nodes};${port}"
 						fi
@@ -119,9 +116,7 @@ function getEndpoints(){
 			fi
 		done
 		IFS=$OLDIFS
-		echo -e "\nFinal endpoints" >> ${LOG}
-		echo "----------------" >> ${LOG}
-		echo -e ${endpoints} >> ${LOG}
+		echo -e "\nFinal endpoints\n-----------\n${endpoints}" >> "${LOG}"
 
 }
 
@@ -131,18 +126,18 @@ function getEndpoints(){
 ###########################################################
 function isContrackinNetwork(){
 	line=$1;
-	dst1=$(echo $line | awk -F"dst=" '{sub(/ .*/,"",$2);print $2}')
-	dst1O1=$(echo ${dst1}|cut -d';' -f1 | cut -d'.' -f1)
-	dst1O2=$(echo ${dst1}|cut -d';' -f1 | cut -d'.' -f2)
-	netO1=$(echo ${network}|cut -d'.' -f1)
-	netO2=$(echo ${network}|cut -d'.' -f2)
+	dst1=$(echo "${line}" | awk -F"dst=" '{sub(/ .*/,"",$2);print $2}')
+	dst1O1=$(echo "${dst1}" | cut -d';' -f1 | cut -d'.' -f1)
+	dst1O2=$(echo "${dst1}" | cut -d';' -f1 | cut -d'.' -f2)
+	netO1=$(echo "${network}" | cut -d'.' -f1)
+	netO2=$(echo "${network}" | cut -d'.' -f2)
 	if [[ "${dst1O1}" == "${netO1}" && "${dst1O2}" == "${netO2}" ]]; then
-		echo "conntrack in network (${network}): ${line}" >> ${LOG}
-		echo ${line} >> ${LOG}
+		echo "conntrack in network (${network}): ${line}" >> "${LOG}"
+		echo "${line}" >> "${LOG}"
 		return 0
 	else
-		echo "conntrack not in network (${network}): ${line}" >> ${LOG}
-		echo ${line} >> ${LOG}
+		echo "conntrack not in network (${network}): ${line}" >> "${LOG}"
+		echo "${line}" >> "${LOG}"
 		return 1
 	fi
 }
@@ -153,14 +148,14 @@ function isContrackinNetwork(){
 ###########################################################
 function isContrackinServices(){
 	line=$1;
-	dst1=$(echo $line | awk -F"dst=" '{sub(/ .*/,"",$2);print $2}')
-	dstport1=$(echo $line | awk -F"dport=" '{sub(/ .*/,"",$2);print $2}')
+	dst1=$(echo "${line}" | awk -F"dst=" '{sub(/ .*/,"",$2);print $2}')
+	dstport1=$(echo "${line}" | awk -F"dport=" '{sub(/ .*/,"",$2);print $2}')
 	OLDIFS=$IFS
 	IFS=$'\n'
-    services=$(echo -e ${services} | xargs | sed -e 's/ /\n/g')
+    services=$(echo -e "${services}" | xargs | sed -e 's/ /\n/g')
 	for service in ${services}; do
-		srvip=$(echo $service|cut -d';' -f1)
-		srvport=$(echo $service|cut -d';' -f2)
+		srvip=$(echo "${service}" | cut -d';' -f1)
+		srvport=$(echo "${service}" | cut -d';' -f2)
 		if [[ "${dst1}" == "${srvip}" && "${dstport1}" == "${srvport}" ]]; then
 			return 0
 		fi
@@ -176,13 +171,12 @@ function isContrackinServices(){
 function isContrackinEndPoints(){
 	line=$1
 	node=$2
-	src2=$(echo $line | awk -F"src=" '{sub(/ .*/,"",$2);print $2}')
-	srcport2=$(echo $line | awk -F"sport=" '{sub(/ .*/,"",$2);print $2}')
-    myep=$(echo -e ${endpoints} | grep ${node} | xargs | sed -e 's/ /\n/g')
+	src2=$(echo "${line}" | awk -F"src=" '{sub(/ .*/,"",$2);print $2}')
+	srcport2=$(echo "${line}" | awk -F"sport=" '{sub(/ .*/,"",$2);print $2}')
+    myep=$(echo -e "${endpoints}" | grep "${node}" | xargs | sed -e 's/ /\n/g')
 	for endpoint in ${myep}; do
-		epip=$(echo ${endpoint} | cut -d';' -f1)
-		epnode=$(echo ${endpoint} | cut -d';' -f2)
-		epport=$(echo ${endpoint} | cut -d';' -f3)
+		epip=$(echo "${endpoint}" | cut -d';' -f1)
+		epport=$(echo "${endpoint}" | cut -d';' -f3)
 		if [[ "${epip}" == "${src2}" && "${epport}" == "${srcport2}" ]]; then
 			return 0
 		fi
@@ -208,10 +202,10 @@ function isContrackinEndPoints(){
 function generateCommands(){
 	node=$1
 	line=$2
-	src1=$(echo ${line} | awk -F"src=" '{sub(/ .*/,"",$2);print $2}')
-	dst1=$(echo ${line} | awk -F"dst=" '{sub(/ .*/,"",$2);print $2}')
-	src2=$(echo ${line} | awk -F"src=" '{sub(/ .*/,"",$3);print $3}')
-	nodesubnet=$(oc get node ${node} -o jsonpath='{.metadata.annotations.k8s\.ovn\.org/node-subnets}'  | jq .default | xargs | cut -d'/' -f1)
+	src1=$(echo "${line}" | awk -F"src=" '{sub(/ .*/,"",$2);print $2}')
+	dst1=$(echo "${line}" | awk -F"dst=" '{sub(/ .*/,"",$2);print $2}')
+	src2=$(echo "${line}" | awk -F"src=" '{sub(/ .*/,"",$3);print $3}')
+	nodesubnet=$(oc get node "${node}" -o jsonpath='{.metadata.annotations.k8s\.ovn\.org/node-subnets}'  | jq .default | xargs | cut -d'/' -f1)
 	echo "#Generating lines for node (${node}) subnet:${nodesubnet}"
 	echo "#Raw line:${line}"
 	echo "conntrack -D -s ${src1} -d ${dst1} -r ${src2} -q ${src1}"
@@ -228,17 +222,17 @@ function getConntrack(){
 	for line in ${nodes}; do
 		OLDIFS=$IFS
 		IFS=$'\n'
-		pod=$(echo ${line}|cut -d';' -f1)
-		node=$(echo ${line}|cut -d';' -f2)
-		conntracks=$(oc -n openshift-ovn-kubernetes exec pod/${pod} -c ovnkube-node -- conntrack -L -p udp 2> /dev/null)
-		for line in $(echo ${conntracks} | sed 's/udp/\nudp/g' | sed 's/\[UNREPLIED\]//g' | sed 's/\[ASSURED\]//g' | tr -s ' '); do
+		pod=$(echo "${line}" | cut -d';' -f1)
+		node=$(echo "${line}" | cut -d';' -f2)
+		conntracks=$(oc -n openshift-ovn-kubernetes exec pod/"${pod}" -c ovnkube-node -- conntrack -L -p udp 2> /dev/null)
+		for conntrack in $(echo "${conntracks}" | sed 's/udp/\nudp/g' | sed 's/\[UNREPLIED\]//g' | sed 's/\[ASSURED\]//g' | tr -s ' '); do
 			# if not found in the service network or found in services or if found in endpoints, ignore it
 			# otherwise generate the commands to remove it
-			if isContrackinNetwork $line; then
-				if ! isContrackinServices $line; then
-					if ! isContrackinEndPoints $line $node; then
-						echo -e "===> Generating conntrack lines for ($node): $line" >> ${LOG}
-						generateCommands "$node" "$line"
+			if isContrackinNetwork "${conntrack}"; then
+				if ! isContrackinServices "${conntrack}"; then
+					if ! isContrackinEndPoints "${conntrack}" "${node}"; then
+						echo -e "===> Generating conntrack lines for (${node}): $conntrack}" >> "${LOG}"
+						generateCommands "${node}" "${line}"
 					fi				
 				fi
 			fi
